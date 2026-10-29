@@ -1,7 +1,11 @@
 [package]
-name = "static-ring-buffer"
+name = "avr-thermostat"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["kwantam"]
+description = "embedded thermostat for True GDM-10PT fridge"
+repository = "https://github.com/kwantam/avr-thermostat"
 
 [dependencies]
 crc = "3.4.0"

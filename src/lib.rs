@@ -1,5 +1,14 @@
 //! A statically sized ring buffer holding fixed-size records.
 #![no_std]
+#![warn(
+    missing_docs,
+    nonstandard_style,
+    rust_2021_compatibility,
+    rust_2018_idioms,
+    clippy::unnested_or_patterns,
+    clippy::redundant_closure_for_method_calls,
+    unsafe_code
+)]
 
 use crc::{CRC_32_ISO_HDLC, Crc, NoTable};
 use hex_literal::hex;
@@ -31,7 +40,7 @@ pub trait Checksummable {
 /// a packed repr (the reference might be unaligned), so instead we return
 /// copies of the stored values. These values should anyway be short, so that
 /// is fine.
-#[repr(packed)]
+#[repr(C, packed)]
 pub struct StaticRingbuf<T: Checksummable + Copy, const L: usize> {
     /// An identifier corresponding to the next item to be added to the ring
     next_id: u32,
@@ -59,6 +68,7 @@ pub struct StaticRingbuf<T: Checksummable + Copy, const L: usize> {
 // BUG currently next=head is treated as length 0. should be length L,
 // and a valid ring buffer never has 0 entries in it
 
+#[allow(clippy::len_without_is_empty)]
 impl<T: Checksummable + Copy, const L: usize> StaticRingbuf<T, L> {
     /// Get the number of valid elements in the ring buffer
     pub fn len(&self) -> usize {
