@@ -7,32 +7,15 @@ use arduino_hal::{
     prelude::{_embedded_hal_blocking_delay_DelayMs, _unwrap_infallible_UnwrapInfallible},
     Delay,
 };
-use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
 use one_wire_bus::{OneWire, OneWireError};
 use panic_halt as _;
-use ufmt::{uwrite, uwriteln};
+use ufmt::uwriteln;
 
 pub mod ds18b20;
 pub mod reset;
+pub mod state;
 
-static ADC_VALUE: AtomicU16 = AtomicU16::new(0);
-static ADC_COUNT: AtomicU8 = AtomicU8::new(0);
-
-#[avr_device::interrupt(atmega328p)]
-fn ADC() {
-    // SAFETY: we are only using this to read the ADC value and clear the timer interrupt flag
-    let dp = unsafe { arduino_hal::Peripherals::steal() };
-    let val = dp.ADC.adc().read().bits();
-    ADC_VALUE.store(val, Ordering::SeqCst);
-    ADC_COUNT.store(
-        ADC_COUNT.load(Ordering::SeqCst).wrapping_add(1),
-        Ordering::SeqCst,
-    );
-
-    // clear the ocf1b flag (NOTE: write 1 to clear flag!)
-    // we have to do this because the ADC requires a rising edge to sample
-    dp.TC1.tifr1().write(|w| w.ocf1b().bit(true));
-}
+type OwError = OneWireError<core::convert::Infallible>;
 
 #[arduino_hal::entry]
 fn main() -> ! {
@@ -48,82 +31,75 @@ fn main() -> ! {
     match reset::ResetReason::try_from(mcusr) {
         Err(e) => uwriteln!(&mut serial, "RESET unknown({:x})", e),
         Ok(r) => uwriteln!(&mut serial, "RESET {}", <&'static str>::from(r)),
-    }.unwrap_infallible();
+    }
+    .unwrap_infallible();
 
     //  digital output pins
     let mut led = pins.d13.into_output();
-    let mut relay = pins.d8.into_opendrain_high();
+    // make it an open drain first to make sure the output buffer is in the right state
+    let mut relay = pins.d8.into_opendrain().into_opendrain_high();
 
     // set up the one-wire thermometer
     let ow_pin = pins.d2.into_opendrain_high();
     let mut ow_bus = OneWire::new(ow_pin).unwrap();
     let mut delay = Delay::new();
-    delay.delay_ms(10u16); // allow one-wire bus to settle
-    let mut thermometer = match ds18b20::TempSensor::new(
-        &mut ow_bus,
-        ds18b20::TempSensorResolution::Bits12,
-        None,
-        &mut delay,
-    ) {
-        Err(e) => {
-            uwriteln!(&mut serial, "THERM: ERR(INIT): {}", ow_error_str(e)).unwrap_infallible();
-            panic!();
-        }
-        Ok(t) => t,
+    // loop until the thermometer is properly initialized
+    let mut thermometer = loop {
+        delay.delay_ms(100u16);
+        match ds18b20::TempSensor::new(
+            &mut ow_bus,
+            ds18b20::TempSensorResolution::Bits12,
+            None,
+            &mut delay,
+        ) {
+            Err(e) => {
+                uwriteln!(&mut serial, "ERR THERM(INIT) {}", ow_error_str(e)).unwrap_infallible()
+            }
+            Ok(t) => break t,
+        };
     };
 
     // set up the watchdog timer
     let mut watchdog = wdt::Wdt::new(dp.WDT, dp.CPU.mcusr());
-    watchdog.start(wdt::Timeout::Ms2000).unwrap_or_default();
+    watchdog.start(wdt::Timeout::Ms4000).unwrap_or_default();
 
-    // ADC and timer setup for auto conversion of adc0 at 1.2 kHz, interrupting when finished
-    adc_timer_setup(&dp.ADC, &dp.TC1);
-    unsafe { avr_device::interrupt::enable() };
-
-    let mut count = 0u8;
     let mut delay = Delay::new();
+    let mut state =
+        state::ThermostatState::new(&mut led, &mut relay, &mut serial, &mut thermometer);
+
     loop {
+        // reset the watchdog timer
         watchdog.feed();
 
-        led.toggle();
-        uwrite!(&mut serial, "hello ").unwrap_infallible();
-        delay.delay_ms(100u16);
+        // INVARIANT: state.temperature is None at this point
+        assert!(state.take_temperature().is_none());
 
-        led.toggle();
-        uwrite!(&mut serial, "world\n").unwrap_infallible();
-        delay.delay_ms(100u16);
+        // if we're converting, wait until conversion is complete and then read the value
+        state.update_temperature();
 
-        // flip the relay every 5 seconds
-        if count == 50u8 {
-            // thermometer
-            if let Err(e) = thermometer.start_conversion() {
-                uwriteln!(&mut serial, "THERM: ERR(CONV): {}", ow_error_str(e)).unwrap_infallible();
-            }
+        // immediately start a new conversion
+        state.start_conversion();
 
-            // read the ADC value
-            let adc_value = ADC_VALUE.load(Ordering::SeqCst);
-            let adc_count = ADC_COUNT.load(Ordering::SeqCst);
-            uwriteln!(&mut serial, "ADC: {:x} {}", adc_value, adc_count).unwrap_infallible();
+        // Check if we have a temperature reading and maybe change thermostat state if so
+        if let Some(t) = state.take_temperature() {
+            // good temperature reading, so clear any temp sensor error count
+            state.clear_temp_err();
+            state.write_temperature(t);
 
-            // wait for thermometer to be ready
-            while !thermometer.conversion_complete().unwrap_or_default() {
-                delay.delay_ms(1u16);
-            }
-            match thermometer.read_temperature() {
-                Err(e) => uwriteln!(&mut serial, "THERM: ERR(READ): {}", ow_error_str(e)),
-                Ok(t) => uwriteln!(&mut serial, "THERM: {:x}", t),
-            }
-            .unwrap_infallible();
-
-            // relay
-            count = 0;
-            relay = if relay.is_low() {
-                relay.into_opendrain_high()
+            // decide whether to change state
+            if state.cooling() {
+                unimplemented!()
             } else {
-                relay.into_opendrain()
-            };
+                unimplemented!()
+            }
+        } else if state.is_temp_err() {
+            // if we're in temperature sensor error state, turn off the thermostat...
+            state.thermostat_off();
+            // ...then go into a busyloop until wdt resets us
+            loop {
+                delay.delay_ms(1000u16);
+            }
         }
-        count = count.wrapping_add(1u8);
     }
 }
 
@@ -136,34 +112,4 @@ fn ow_error_str<E>(e: OneWireError<E>) -> &'static str {
         OneWireError::CrcMismatch => "OWE CrcMismatch",
         OneWireError::Timeout => "OWE Timeout",
     }
-}
-
-fn adc_timer_setup(adc: &avr_device::atmega328p::ADC, tc1: &avr_device::atmega328p::TC1) {
-    // set up ADC for automatic conversion of the adc0 input at 1.2 kHz
-    // - vref = 1.1v
-    // - mux = adc8 (temperature sensor)
-    // - right aligned output
-    adc.admux().write(|w| unsafe { w.bits(0xc8) });
-    // - adc auto trigger source = timer1 compare match b
-    adc.adcsrb().write(|w| unsafe { w.bits(0x05) });
-    // - disable digital input buffer in a0
-    adc.didr0().write(|w| unsafe { w.bits(0x01) });
-    // prescaler = 128 (16000000 / 128 = 125000 Hz ADC clock)
-    // adc interrupt enabled
-    // adc auto trigger enabled
-    // adc enabled
-    adc.adcsra().write(|w| unsafe { w.bits(0xaf) });
-
-    // set up timer1
-    // ocr1a = 13332; 16 MHz / 13332 = 1.2 kHz
-    tc1.ocr1a().write(|w| w.set(13332u16));
-    // ocr1b = 6666; compare will fire when timer crosses this value
-    tc1.ocr1b().write(|w| w.set(6666u16));
-    // clear tccr1a
-    tc1.tccr1a().reset();
-    // set up CTC mode (auto clear counter when it reaches ocr1a value)
-    // unscaled clock as input to the timer (timer is now enabled)
-    tc1.tccr1b().write(|w| unsafe { w.bits(0x09) });
-    // clear the interrupt flag (NOTE: write 1 to clear flag!)
-    tc1.tifr1().write(|w| w.ocf1b().bit(true));
 }

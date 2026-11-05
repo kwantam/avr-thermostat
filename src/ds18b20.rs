@@ -6,6 +6,8 @@ use arduino_hal::port::{mode::OpenDrain, Pin, PinOps};
 use avr_hal_generic::hal_v0::blocking::delay::{DelayMs, DelayUs};
 use one_wire_bus::{crc::check_crc8, Address, OneWire, OneWireError};
 
+use super::OwError;
+
 #[repr(u8)]
 #[derive(Default, Copy, Clone)]
 pub enum TempSensorResolution {
@@ -29,8 +31,6 @@ impl TempSensorResolution {
     }
 }
 
-type OwError = OneWireError<core::convert::Infallible>;
-
 // Commands are documented in the DS18B20 datasheet
 const WRITE_SCRATCHPAD: u8 = 0x4e;
 const READ_SCRATCHPAD: u8 = 0xbe;
@@ -40,7 +40,7 @@ pub struct TempSensor<'a, PIN: PinOps, D: DelayUs<u16> + DelayMs<u16>> {
     ow_bus: &'a mut OneWire<Pin<OpenDrain, PIN>>,
     resolution: TempSensorResolution,
     addr: Option<&'a Address>,
-    delay: &'a mut D,
+    pub(crate) delay: &'a mut D,
 }
 
 impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
