@@ -14,7 +14,6 @@ use ufmt::{uwrite, uwriteln};
 
 pub mod ds18b20;
 pub mod reset;
-pub mod variance_estimator;
 
 static ADC_VALUE: AtomicU16 = AtomicU16::new(0);
 static ADC_COUNT: AtomicU8 = AtomicU8::new(0);
