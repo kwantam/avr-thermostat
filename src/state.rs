@@ -110,10 +110,10 @@ where
     pub fn start_conversion(&mut self) {
         if let Err(e) = self.thermometer.start_conversion() {
             self.increment_temp_err();
-            self.set_converting(false);
+            self.converting = false;
             uwriteln!(self.serial, "ERR THERM(CONV) {}", ow_error_str(e)).unwrap_infallible();
         } else {
-            self.set_converting(true);
+            self.converting = true;
         }
     }
 
@@ -125,16 +125,6 @@ where
     /// Write the temperature to the serial port
     pub fn write_temperature(&mut self, t: u16) {
         uwriteln!(self.serial, "THERM {:x}", t).unwrap_infallible();
-    }
-
-    /// Set the `converting` bit.
-    pub fn set_converting(&mut self, converting: bool) {
-        self.converting = converting;
-    }
-
-    /// Get the `converting` bit.
-    pub fn converting(&self) -> bool {
-        self.converting
     }
 
     /// Get the `cooling` bit.

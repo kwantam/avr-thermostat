@@ -72,7 +72,7 @@ fn main() -> ! {
         watchdog.feed();
 
         // INVARIANT: state.temperature is None at this point
-        assert!(state.take_temperature().is_none());
+        debug_assert!(state.take_temperature().is_none());
 
         // if we're converting, wait until conversion is complete and then read the value
         state.update_temperature();
