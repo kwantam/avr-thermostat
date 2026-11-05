@@ -1,0 +1,18 @@
+[general]
+# board = "nano"
+# After flashing, open the serial console at 57600 baud.
+open-console = false
+serial-baudrate = 38400
+console-port = "/dev/cu.usbserial-110"
+
+[board]
+name = "nano via usbasp"
+
+[board.reset]
+automatic = true
+
+[board.avrdude]
+programmer = "usbasp"
+partno = "atmega328p"
+baudrate = -1
+do-chip-erase = true
