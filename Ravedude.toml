@@ -1,6 +1,4 @@
 [general]
-# board = "nano"
-# After flashing, open the serial console at 57600 baud.
 open-console = false
 serial-baudrate = 38400
 console-port = "/dev/cu.usbserial-110"
