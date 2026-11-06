@@ -31,3 +31,13 @@ impl From<ResetReason> for &'static str {
         }
     }
 }
+
+macro_rules! write_reset_reason {
+    ($serial:expr, $mcusr:expr) => {
+        match reset::ResetReason::try_from($mcusr) {
+            Err(e) => uwriteln!(&mut $serial, "0 RESET unknown({:x})", e),
+            Ok(r) => uwriteln!(&mut $serial, "0 RESET {}", <&'static str>::from(r)),
+        }
+        .unwrap_infallible();
+    };
+}

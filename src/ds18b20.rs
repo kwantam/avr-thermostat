@@ -43,6 +43,29 @@ pub struct TempSensor<'a, PIN: PinOps, D: DelayUs<u16> + DelayMs<u16>> {
     pub(crate) delay: &'a mut D,
 }
 
+macro_rules! temp_sensor {
+    ($ow_bus:expr, $resolution:expr, $addr:expr, $delay:expr, $serial:expr, $msg_count:expr) => {
+        loop {
+            // let the one-wire bus settle
+            $delay.delay_ms(10u16);
+
+            // attempt to configure the temperature sensor
+            match ds18b20::TempSensor::new(&mut $ow_bus, $resolution, $addr, &mut $delay) {
+                Err(e) => ufmt::uwriteln!(
+                    &mut $serial,
+                    "{} ERR THERM(INIT) {}",
+                    *$msg_count,
+                    ow_error_str(e)
+                )
+                .unwrap_infallible(),
+                Ok(t) => break t,
+            }
+
+            *$msg_count = $msg_count.wrapping_add(1);
+        }
+    };
+}
+
 impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
     /// Construct a new TempSensor and configure the temperature sensor
     /// with the specified resolution.

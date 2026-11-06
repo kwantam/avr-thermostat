@@ -10,7 +10,9 @@ use one_wire_bus::{OneWire, OneWireError};
 use panic_halt as _;
 use ufmt::uwriteln;
 
+#[macro_use]
 pub mod ds18b20;
+#[macro_use]
 pub mod reset;
 pub mod state;
 
@@ -27,41 +29,29 @@ fn main() -> ! {
 
     // set up serial port and send reset reason
     let mut serial = arduino_hal::default_serial!(dp, pins, 38400);
-    match reset::ResetReason::try_from(mcusr) {
-        Err(e) => uwriteln!(&mut serial, "0 RESET unknown({:x})", e),
-        Ok(r) => uwriteln!(&mut serial, "0 RESET {}", <&'static str>::from(r)),
-    }
-    .unwrap_infallible();
+    write_reset_reason!(serial, mcusr);
 
-    //  digital output pins
+    // status LED
     let mut led = pins.d13.into_output();
+    // relay
     // make it an open drain first to make sure the output buffer is in the right state
     let mut relay = pins.d8.into_opendrain().into_opendrain_high();
 
-    // set up the one-wire thermometer
+    // one-wire bus
     let ow_pin = pins.d2.into_opendrain_high();
     let mut ow_bus = OneWire::new(ow_pin).unwrap();
     let mut delay = Delay::new();
 
-    // loop until the thermometer is properly initialized
+    // initialize the temperature sensor
     let mut count = 1u16;
-    let mut thermometer = loop {
-        // delay to let the one-wire bus settle
-        delay.delay_ms(100u16);
-
-        // attempt to configure the temperature sensor
-        match ds18b20::TempSensor::new(
-            &mut ow_bus,
-            ds18b20::TempSensorResolution::Bits12,
-            None,
-            &mut delay,
-        ) {
-            Err(e) => uwriteln!(&mut serial, "{} ERR THERM(INIT) {}", count, ow_error_str(e))
-                .unwrap_infallible(),
-            Ok(t) => break t,
-        };
-        count = count.wrapping_add(1);
-    };
+    let mut thermometer = temp_sensor!(
+        ow_bus,
+        ds18b20::TempSensorResolution::Bits12,
+        None,
+        delay,
+        serial,
+        &mut count
+    );
 
     // construct the state machine controller
     let mut state =
