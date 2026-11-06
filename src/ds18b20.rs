@@ -31,11 +31,20 @@ impl TempSensorResolution {
     }
 }
 
-// Commands are documented in the DS18B20 datasheet
+/// Recall config values from the EEPROM
 const RECALL_EEPROM: u8 = 0xb8;
+
+/// Write config values to the scratchpad RAM
 const WRITE_SCRATCHPAD: u8 = 0x4e;
+
+/// Read the entire scratchpad RAM
 const READ_SCRATCHPAD: u8 = 0xbe;
+
+/// Start a temperature conversion
 const CONVERT_T: u8 = 0x44;
+
+/// Max time to wait for the RECALL_EEPROM command to finish
+const MAX_RECALL_TIME_MS: u8 = 10;
 
 pub struct TempSensor<'a, PIN: PinOps, D: DelayUs<u16> + DelayMs<u16>> {
     ow_bus: &'a mut OneWire<Pin<OpenDrain, PIN>>,
@@ -95,10 +104,17 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
         self.ow_bus
             .send_command(RECALL_EEPROM, self.addr, self.delay)?;
         // wait until the recall_eeprom command is done
+        let mut recall_count = 0u8;
         loop {
             self.delay.delay_us(1000);
             if self.command_complete()? {
                 break;
+            }
+            recall_count = recall_count.saturating_add(1);
+
+            // error with a timeout if recall takes too long
+            if recall_count > MAX_RECALL_TIME_MS {
+                return Err(OneWireError::Timeout);
             }
         }
         // now read the power-on values
@@ -140,32 +156,11 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
         Ok(())
     }
 
-    /// Command a conversion and wait for the result. This function waits
-    /// the amount of time specified in the datasheet
-    pub fn convert_blocking(&mut self) -> Result<i16, OwError> {
-        self.start_conversion()?;
-
-        // NOTE could do this with DelayUs and avoid the DelayMs bound
-        self.delay.delay_ms(self.resolution.delay_ms());
-
-        self.read_temperature()
-    }
-
-    /// Command a conversion and wait for the result, polling the sensor for completion
-    pub fn convert_polling(&mut self) -> Result<i16, OwError> {
-        self.start_conversion()?;
-
-        loop {
-            // wait 1ms
-            self.delay.delay_us(1000);
-
-            // poll for completion
-            if self.command_complete()? {
-                break;
-            }
-        }
-
-        self.read_temperature()
+    /// Return the max conversion delay in milliseconds. For blocking polling of the
+    /// temperature sensor, wait this long after `start_conversion()` before attempting
+    /// to read the response.
+    pub fn max_conversion_delay_ms(&self) -> u16 {
+        self.resolution.delay_ms()
     }
 
     /// Initiate a conversion and do not wait for the result
@@ -195,7 +190,7 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
             return Err(e);
         }
 
-        // convert the temperature reading to a u16 and return it
+        // convert the temperature reading to an i16 and return it
         Ok(i16::from_le_bytes([scratch[0], scratch[1]]))
     }
 }
