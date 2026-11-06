@@ -11,9 +11,17 @@ use arduino_hal::{
     Delay, Usart,
 };
 use avr_hal_generic::hal_v0::blocking::delay::DelayMs;
-use ufmt::uwriteln;
 
 use super::{ds18b20::TempSensor, ow_error_str};
+
+/// A macro to write a line to the serial port and increment the message counter
+macro_rules! uart_writeln {
+    ($self:expr, $fmt:literal, $( $arg:expr ),*) => {
+        ufmt::uwrite!($self.serial, "{} ", $self.message_count).unwrap_infallible();
+        ufmt::uwriteln!($self.serial, $fmt, $($arg),*).unwrap_infallible();
+        $self.message_count = $self.message_count.wrapping_add(1);
+    }
+}
 
 /// Low temperature threshold: 41 F = 5 C = 80 LSBs
 const TEMP_THRESH_LO: u16 = 80;
@@ -49,6 +57,7 @@ where
     cooling: bool,
     debounce_count: u16,
     temp_err_count: u8,
+    message_count: u16,
     led: &'a mut Pin<Output, LED>,
     relay: &'a mut Pin<OpenDrain, RELAY>,
     serial: &'a mut Usart<USART, RXPIN, TXPIN>,
@@ -68,6 +77,7 @@ where
         relay: &'a mut Pin<OpenDrain, RELAY>,
         serial: &'a mut Usart<USART, RXPIN, TXPIN>,
         thermometer: &'a mut TempSensor<'a, OWPIN, Delay>,
+        message_count: u16,
     ) -> Self {
         Self {
             temperature: None,
@@ -75,6 +85,7 @@ where
             cooling: false,
             debounce_count: 0,
             temp_err_count: 0,
+            message_count,
             led,
             relay,
             serial,
@@ -83,17 +94,17 @@ where
     }
 
     /// Record a temperature error
-    pub fn increment_temp_err(&mut self) {
+    fn increment_temp_err(&mut self) {
         self.temp_err_count = self.temp_err_count.saturating_add(1);
     }
 
     /// Clear the temperature error count
-    pub fn clear_temp_err(&mut self) {
+    fn clear_temp_err(&mut self) {
         self.temp_err_count = 0;
     }
 
     /// Check whether we are in the temperature error state
-    pub fn is_temp_err(&self) -> bool {
+    fn is_temp_err(&self) -> bool {
         self.temp_err_count >= TEMP_ERR_THRESH
     }
 
@@ -103,12 +114,12 @@ where
     }
 
     /// Clear the debounce counter
-    pub fn clear_debounce_cnt(&mut self) {
+    fn clear_debounce_cnt(&mut self) {
         self.debounce_count = 0;
     }
 
     /// Check whether we're debounced
-    pub fn is_debounced(&self) -> bool {
+    fn is_debounced(&self) -> bool {
         if self.cooling {
             self.debounce_count > MIN_ON_TIME
         } else {
@@ -127,8 +138,7 @@ where
                 Err(e) => {
                     self.increment_temp_err();
                     self.temperature = None;
-                    uwriteln!(self.serial, "ERR THERM(CONV) {}", ow_error_str(e))
-                        .unwrap_infallible();
+                    uart_writeln!(self, "ERR THERM(READ) {}", ow_error_str(e));
                 }
                 Ok(t) => {
                     self.temperature = Some(t);
@@ -142,31 +152,51 @@ where
         if let Err(e) = self.thermometer.start_conversion() {
             self.increment_temp_err();
             self.converting = false;
-            uwriteln!(self.serial, "ERR THERM(CONV) {}", ow_error_str(e)).unwrap_infallible();
+            uart_writeln!(self, "ERR THERM(CONV) {}", ow_error_str(e));
         } else {
             self.converting = true;
         }
     }
 
-    /// Take the temperature value from the state
-    pub fn take_temperature(&mut self) -> Option<u16> {
-        self.temperature.take()
+    /// Update the cooling state based on the measured temperature, if available
+    pub fn update_cooling_state(&mut self) {
+        if let Some(t) = self.temperature.take() {
+            // got a good temperature reading; clear temp sensor error count
+            self.clear_temp_err();
+            uart_writeln!(self, "THERM {:x}", t);
+
+            // decide whether to change cooling state
+            #[allow(clippy::collapsible_if)]
+            if self.cooling && self.should_stop_cooling(t) {
+                if self.thermostat_off() {
+                    self.clear_debounce_cnt();
+                }
+            } else if !self.cooling && self.should_start_cooling(t) {
+                if self.thermostat_on() {
+                    self.clear_debounce_cnt();
+                }
+            }
+        } else if self.is_temp_err() {
+            // if we're in temperature sensor error state, turn off thermostat...
+            // SAFETY bypass the debouncer because this is a hard error
+            unsafe {
+                self.thermostat_off_unchecked();
+            }
+
+            // ...then write status line to the serial port...
+            uart_writeln!(self, "ERR THERM(ERRS) {}", self.temp_err_count);
+
+            // ...then go into a busyloop until wdt resets us
+            loop {
+                self.thermometer.delay.delay_ms(1000u16);
+            }
+        }
     }
 
-    /// Write the temperature to the serial port
-    pub fn write_temperature(&mut self, t: u16) {
-        uwriteln!(self.serial, "THERM {:x}", t).unwrap_infallible();
-    }
-
-    /// Get the `cooling` bit.
-    pub fn cooling(&self) -> bool {
-        self.cooling
-    }
-
-    /// Enable the thermostat
+    /// Enable the thermostat if the debouncer allows it
     ///
     /// Returns true if the thermostat was actually enabled
-    pub fn thermostat_on(&mut self) -> bool {
+    fn thermostat_on(&mut self) -> bool {
         if self.is_debounced() {
             self.cooling = true;
             self.led.set_high();
@@ -177,10 +207,10 @@ where
         false
     }
 
-    /// Disable the thermostat
+    /// Disable the thermostat if the debouncer allows it
     ///
     /// Returns true if the thermostat was actually disabled
-    pub fn thermostat_off(&mut self) -> bool {
+    fn thermostat_off(&mut self) -> bool {
         if self.is_debounced() {
             unsafe {
                 self.thermostat_off_unchecked();
@@ -191,25 +221,25 @@ where
         false
     }
 
-    /// Disable the thermostat without checking the debouncer
+    /// Disable the thermostat, bypassing the debouncer
     ///
     /// # Safety
     ///
     /// This function should not be called except after checking
     /// the debouncer or in case of an error state.
-    pub unsafe fn thermostat_off_unchecked(&mut self) {
+    unsafe fn thermostat_off_unchecked(&mut self) {
         self.cooling = false;
         self.led.set_low();
         self.relay.set_high();
     }
 
     /// Check whether the given temperature is below the low threshold
-    pub fn should_stop_cooling(&self, t: u16) -> bool {
+    fn should_stop_cooling(&self, t: u16) -> bool {
         t < TEMP_THRESH_LO
     }
 
     /// Check whether the given temperature is above the hi threshold
-    pub fn should_start_cooling(&self, t: u16) -> bool {
+    fn should_start_cooling(&self, t: u16) -> bool {
         t > TEMP_THRESH_HI
     }
 }

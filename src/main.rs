@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(abi_avr_interrupt)]
 
 use arduino_hal::{
     hal::wdt,
@@ -29,8 +28,8 @@ fn main() -> ! {
     // set up serial port and send reset reason
     let mut serial = arduino_hal::default_serial!(dp, pins, 38400);
     match reset::ResetReason::try_from(mcusr) {
-        Err(e) => uwriteln!(&mut serial, "RESET unknown({:x})", e),
-        Ok(r) => uwriteln!(&mut serial, "RESET {}", <&'static str>::from(r)),
+        Err(e) => uwriteln!(&mut serial, "0 RESET unknown({:x})", e),
+        Ok(r) => uwriteln!(&mut serial, "0 RESET {}", <&'static str>::from(r)),
     }
     .unwrap_infallible();
 
@@ -43,36 +42,38 @@ fn main() -> ! {
     let ow_pin = pins.d2.into_opendrain_high();
     let mut ow_bus = OneWire::new(ow_pin).unwrap();
     let mut delay = Delay::new();
+
     // loop until the thermometer is properly initialized
+    let mut count = 1u16;
     let mut thermometer = loop {
+        // delay to let the one-wire bus settle
         delay.delay_ms(100u16);
+
+        // attempt to configure the temperature sensor
         match ds18b20::TempSensor::new(
             &mut ow_bus,
             ds18b20::TempSensorResolution::Bits12,
             None,
             &mut delay,
         ) {
-            Err(e) => {
-                uwriteln!(&mut serial, "ERR THERM(INIT) {}", ow_error_str(e)).unwrap_infallible()
-            }
+            Err(e) => uwriteln!(&mut serial, "{} ERR THERM(INIT) {}", count, ow_error_str(e))
+                .unwrap_infallible(),
             Ok(t) => break t,
         };
+        count = count.wrapping_add(1);
     };
+
+    // construct the state machine controller
+    let mut state =
+        state::ThermostatState::new(&mut led, &mut relay, &mut serial, &mut thermometer, count);
 
     // set up the watchdog timer
     let mut watchdog = wdt::Wdt::new(dp.WDT, dp.CPU.mcusr());
     watchdog.start(wdt::Timeout::Ms4000).unwrap_or_default();
 
-    let mut delay = Delay::new();
-    let mut state =
-        state::ThermostatState::new(&mut led, &mut relay, &mut serial, &mut thermometer);
-
     loop {
         // reset the watchdog timer
         watchdog.feed();
-
-        // INVARIANT: state.temperature is None at this point
-        debug_assert!(state.take_temperature().is_none());
 
         // if we're converting, wait until conversion is complete and then read the value
         state.update_temperature();
@@ -80,34 +81,8 @@ fn main() -> ! {
         // immediately start a new conversion
         state.start_conversion();
 
-        // Check if we have a temperature reading and maybe change thermostat state if so
-        if let Some(t) = state.take_temperature() {
-            // good temperature reading, so clear any temp sensor error count
-            state.clear_temp_err();
-            state.write_temperature(t);
-
-            // decide whether to change state
-            #[allow(clippy::collapsible_if)]
-            if state.cooling() && state.should_stop_cooling(t) {
-                if state.thermostat_off() {
-                    state.clear_debounce_cnt();
-                }
-            } else if !state.cooling() && state.should_start_cooling(t) {
-                if state.thermostat_on() {
-                    state.clear_debounce_cnt();
-                }
-            }
-        } else if state.is_temp_err() {
-            // if we're in temperature sensor error state, turn off the thermostat...
-            // SAFETY we bypass the debouncer here because we're in an error state
-            unsafe {
-                state.thermostat_off_unchecked();
-            }
-            // ...then go into a busyloop until wdt resets us
-            loop {
-                delay.delay_ms(1000u16);
-            }
-        }
+        // update compressor state if indicated
+        state.update_cooling_state();
 
         // increment the debouncer for min on- and off-time
         state.increment_debounce_cnt();
