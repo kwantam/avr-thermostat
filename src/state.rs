@@ -16,18 +16,18 @@ use super::{ds18b20::TempSensor, ow_error_str};
 
 /// A macro to write a line to the serial port and increment the message counter
 macro_rules! uart_writeln {
-    ($self:expr, $fmt:literal, $( $arg:expr ),*) => {
+    ($self:expr, $fmt:literal, $( $arg:expr ),*) => {{
         ufmt::uwrite!($self.serial, "{} ", $self.message_count).unwrap_infallible();
         ufmt::uwriteln!($self.serial, $fmt, $($arg),*).unwrap_infallible();
         $self.message_count = $self.message_count.wrapping_add(1);
-    }
+    }}
 }
 
 /// Low temperature threshold: 41 F = 5 C = 80 LSBs
-const TEMP_THRESH_LO: u16 = 80;
+const TEMP_THRESH_LO: i16 = 80;
 
 /// High temperature threshold: 43 F = 6 1/9 C = 97 7/9 LSBs
-const TEMP_THRESH_HI: u16 = 98;
+const TEMP_THRESH_HI: i16 = 98;
 
 /// Minimum on-time for the compressor
 ///
@@ -52,12 +52,12 @@ where
     OWPIN: PinOps,
     USART: UsartOps<Atmega, RXPIN, TXPIN>,
 {
-    temperature: Option<u16>,
+    temperature: Option<i16>,
     converting: bool,
     cooling: bool,
     debounce_count: u16,
     temp_err_count: u8,
-    message_count: u16,
+    message_count: u32,
     led: &'a mut Pin<Output, LED>,
     relay: &'a mut Pin<OpenDrain, RELAY>,
     serial: &'a mut Usart<USART, RXPIN, TXPIN>,
@@ -77,7 +77,7 @@ where
         relay: &'a mut Pin<OpenDrain, RELAY>,
         serial: &'a mut Usart<USART, RXPIN, TXPIN>,
         thermometer: &'a mut TempSensor<'a, OWPIN, Delay>,
-        message_count: u16,
+        message_count: u32,
     ) -> Self {
         Self {
             temperature: None,
@@ -130,7 +130,14 @@ where
     /// Update temperature reading based on output of thermometer
     pub fn update_temperature(&mut self) {
         if self.converting {
-            while !self.thermometer.conversion_complete().unwrap_or_default() {
+            // if we keep getting errors here, we'll loop until the watchdog resets us
+            loop {
+                match self.thermometer.conversion_complete() {
+                    Ok(complete) if complete => break,
+                    Ok(_) => (),
+                    Err(e) => uart_writeln!(self, "ERR THERM(WAIT) {}", ow_error_str(e)),
+                };
+
                 self.thermometer.delay.delay_ms(1u16);
             }
 
@@ -177,11 +184,9 @@ where
                 }
             }
         } else if self.is_temp_err() {
-            // if we're in temperature sensor error state, turn off thermostat...
-            // SAFETY bypass the debouncer because this is a hard error
-            unsafe {
-                self.thermostat_off_unchecked();
-            }
+            // if we're in temperature sensor error state, turn off thermostat,
+            // bypassing the debouncer because this is a hard error...
+            self.thermostat_off_unchecked();
 
             // ...then write status line to the serial port...
             uart_writeln!(self, "ERR THERM(ERRS) {}", self.temp_err_count);
@@ -212,9 +217,7 @@ where
     /// Returns true if the thermostat was actually disabled
     fn thermostat_off(&mut self) -> bool {
         if self.is_debounced() {
-            unsafe {
-                self.thermostat_off_unchecked();
-            }
+            self.thermostat_off_unchecked();
             return true;
         }
 
@@ -227,19 +230,19 @@ where
     ///
     /// This function should not be called except after checking
     /// the debouncer or in case of an error state.
-    unsafe fn thermostat_off_unchecked(&mut self) {
+    fn thermostat_off_unchecked(&mut self) {
         self.cooling = false;
         self.led.set_low();
         self.relay.set_high();
     }
 
     /// Check whether the given temperature is below the low threshold
-    fn should_stop_cooling(&self, t: u16) -> bool {
-        t < TEMP_THRESH_LO
+    fn should_stop_cooling(&self, t: i16) -> bool {
+        t <= TEMP_THRESH_LO
     }
 
     /// Check whether the given temperature is above the hi threshold
-    fn should_start_cooling(&self, t: u16) -> bool {
-        t > TEMP_THRESH_HI
+    fn should_start_cooling(&self, t: i16) -> bool {
+        t >= TEMP_THRESH_HI
     }
 }

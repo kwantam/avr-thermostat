@@ -99,7 +99,7 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
 
     /// Command a conversion and wait for the result. This function waits
     /// the amount of time specified in the datasheet
-    pub fn convert_blocking(&mut self) -> Result<u16, OwError> {
+    pub fn convert_blocking(&mut self) -> Result<i16, OwError> {
         self.start_conversion()?;
 
         // NOTE could do this with DelayUs and avoid the DelayMs bound
@@ -109,7 +109,7 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
     }
 
     /// Command a conversion and wait for the result, polling the sensor for completion
-    pub fn convert_polling(&mut self) -> Result<u16, OwError> {
+    pub fn convert_polling(&mut self) -> Result<i16, OwError> {
         self.start_conversion()?;
 
         loop {
@@ -138,7 +138,7 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
     }
 
     /// Read the temperature data from the scratchpad
-    pub fn read_temperature(&mut self) -> Result<u16, OwError> {
+    pub fn read_temperature(&mut self) -> Result<i16, OwError> {
         // read the scratchpad data
         let mut scratch = [0u8; 9];
         self.ow_bus
@@ -147,8 +147,6 @@ impl<'a, PIN: PinOps, D: DelayMs<u16> + DelayUs<u16>> TempSensor<'a, PIN, D> {
         check_crc8(&scratch[..])?;
 
         // convert the temperature reading to a u16 and return it
-        Ok(u16::from_le_bytes(
-            scratch[0..2].try_into().unwrap_or_default(),
-        ))
+        Ok(i16::from_le_bytes([scratch[0], scratch[1]]))
     }
 }
