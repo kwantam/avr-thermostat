@@ -222,8 +222,6 @@ where
 
     /// Disable the thermostat, bypassing the debouncer
     ///
-    /// # Safety
-    ///
     /// This function should not be called except after checking
     /// the debouncer or in case of an error state.
     fn thermostat_off_unchecked(&mut self) {
