@@ -87,19 +87,30 @@ fn main() -> ! {
             state.write_temperature(t);
 
             // decide whether to change state
-            if state.cooling() {
-                unimplemented!()
-            } else {
-                unimplemented!()
+            #[allow(clippy::collapsible_if)]
+            if state.cooling() && state.should_stop_cooling(t) {
+                if state.thermostat_off() {
+                    state.clear_debounce_cnt();
+                }
+            } else if !state.cooling() && state.should_start_cooling(t) {
+                if state.thermostat_on() {
+                    state.clear_debounce_cnt();
+                }
             }
         } else if state.is_temp_err() {
             // if we're in temperature sensor error state, turn off the thermostat...
-            state.thermostat_off();
+            // SAFETY we bypass the debouncer here because we're in an error state
+            unsafe {
+                state.thermostat_off_unchecked();
+            }
             // ...then go into a busyloop until wdt resets us
             loop {
                 delay.delay_ms(1000u16);
             }
         }
+
+        // increment the debouncer for min on- and off-time
+        state.increment_debounce_cnt();
     }
 }
 

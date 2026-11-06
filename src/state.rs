@@ -21,6 +21,18 @@ const TEMP_THRESH_LO: u16 = 80;
 /// High temperature threshold: 43 F = 6 1/9 C = 97 7/9 LSBs
 const TEMP_THRESH_HI: u16 = 98;
 
+/// Minimum on-time for the compressor
+///
+/// The thermometer ADC takes about 750ms to convert.
+/// 160 cycles is 120 seconds.
+const MIN_ON_TIME: u16 = 160;
+
+/// Minimum off-time for the compressor
+///
+/// The thermometer ADC takes about 750ms to convert.
+/// 320 cycles is 240 seconds.
+const MIN_OFF_TIME: u16 = 320;
+
 /// Number of temperature errors before we change state
 const TEMP_ERR_THRESH: u8 = 8;
 
@@ -35,7 +47,7 @@ where
     temperature: Option<u16>,
     converting: bool,
     cooling: bool,
-    debounce_count: u8,
+    debounce_count: u16,
     temp_err_count: u8,
     led: &'a mut Pin<Output, LED>,
     relay: &'a mut Pin<OpenDrain, RELAY>,
@@ -85,6 +97,25 @@ where
         self.temp_err_count >= TEMP_ERR_THRESH
     }
 
+    /// Increment the debounce counter
+    pub fn increment_debounce_cnt(&mut self) {
+        self.debounce_count = self.debounce_count.saturating_add(1);
+    }
+
+    /// Clear the debounce counter
+    pub fn clear_debounce_cnt(&mut self) {
+        self.debounce_count = 0;
+    }
+
+    /// Check whether we're debounced
+    pub fn is_debounced(&self) -> bool {
+        if self.cooling {
+            self.debounce_count > MIN_ON_TIME
+        } else {
+            self.debounce_count > MIN_OFF_TIME
+        }
+    }
+
     /// Update temperature reading based on output of thermometer
     pub fn update_temperature(&mut self) {
         if self.converting {
@@ -132,10 +163,53 @@ where
         self.cooling
     }
 
-    /// Turn the thermostat off.
-    pub fn thermostat_off(&mut self) {
+    /// Enable the thermostat
+    ///
+    /// Returns true if the thermostat was actually enabled
+    pub fn thermostat_on(&mut self) -> bool {
+        if self.is_debounced() {
+            self.cooling = true;
+            self.led.set_high();
+            self.relay.set_low();
+            return true;
+        }
+
+        false
+    }
+
+    /// Disable the thermostat
+    ///
+    /// Returns true if the thermostat was actually disabled
+    pub fn thermostat_off(&mut self) -> bool {
+        if self.is_debounced() {
+            unsafe {
+                self.thermostat_off_unchecked();
+            }
+            return true;
+        }
+
+        false
+    }
+
+    /// Disable the thermostat without checking the debouncer
+    ///
+    /// # Safety
+    ///
+    /// This function should not be called except after checking
+    /// the debouncer or in case of an error state.
+    pub unsafe fn thermostat_off_unchecked(&mut self) {
         self.cooling = false;
         self.led.set_low();
         self.relay.set_high();
+    }
+
+    /// Check whether the given temperature is below the low threshold
+    pub fn should_stop_cooling(&self, t: u16) -> bool {
+        t < TEMP_THRESH_LO
+    }
+
+    /// Check whether the given temperature is above the hi threshold
+    pub fn should_start_cooling(&self, t: u16) -> bool {
+        t > TEMP_THRESH_HI
     }
 }
