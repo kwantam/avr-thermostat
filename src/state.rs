@@ -128,7 +128,7 @@ where
         if self.converting {
             // if we keep getting errors here, we'll loop until the watchdog resets us
             loop {
-                match self.thermometer.conversion_complete() {
+                match self.thermometer.command_complete() {
                     Ok(complete) if complete => break,
                     Ok(_) => (),
                     Err(e) => uart_writeln!(self, "ERR THERM(WAIT) {}", ow_error_str(e)),
