@@ -457,9 +457,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "one-wire-bus"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9761e13074f8f916702c1a1dbe0eda3fb8478704db00493f5a5c27ed5847710"
+source = "git+https://github.com/kwantam/one-wire-bus-rs?branch=master#8c51f01dc79a5d8022134155a991f99b094e6f4d"
 dependencies = [
+ "avr-device",
  "embedded-hal 0.2.7",
 ]
 

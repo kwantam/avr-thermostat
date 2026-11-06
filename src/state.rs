@@ -29,17 +29,13 @@ const TEMP_THRESH_LO: i16 = 80;
 /// High temperature threshold: 43 F = 6 1/9 C = 97 7/9 LSBs
 const TEMP_THRESH_HI: i16 = 98;
 
-/// Minimum on-time for the compressor
-///
-/// The thermometer ADC takes about 750ms to convert.
-/// 160 cycles is 120 seconds.
-const MIN_ON_TIME: u16 = 160;
+/// Minimum on-time for the compressor is 2 minutes.
+/// Each cycle is at least 1 second, enforced by timer0.
+const MIN_ON_TIME: u8 = 120;
 
-/// Minimum off-time for the compressor
-///
-/// The thermometer ADC takes about 750ms to convert.
-/// 320 cycles is 240 seconds.
-const MIN_OFF_TIME: u16 = 320;
+/// Minimum off-time for the compressor is 4 minutes.
+/// Each cycle is at least 1 second, enforced by timer0.
+const MIN_OFF_TIME: u8 = 240;
 
 /// Number of temperature errors before we change state
 const TEMP_ERR_THRESH: u8 = 8;
@@ -55,7 +51,7 @@ where
     temperature: Option<i16>,
     converting: bool,
     cooling: bool,
-    debounce_count: u16,
+    debounce_count: u8,
     temp_err_count: u8,
     message_count: u32,
     led: &'a mut Pin<Output, LED>,

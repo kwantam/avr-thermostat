@@ -15,7 +15,7 @@ arduino-hal = { git = "https://github.com/rahix/avr-hal", rev = "e5c8f37fe484199
 avr-hal-generic = { git = "https://github.com/rahix/avr-hal", rev = "e5c8f37fe48419956e722490a82b9ca9b9fc61a2" }
 avr-device = "0.8.1"
 
-one-wire-bus = "0.1.1"
+one-wire-bus = { git = "https://github.com/kwantam/one-wire-bus-rs", branch = "master" }
 
 panic-halt = "1.0.0"
 

@@ -124,7 +124,7 @@ fn main() -> ! {
         // wait until the SECONDS timer rolls over before continuing
         loop {
             let current = SECONDS.load(Ordering::SeqCst);
-            if current > seconds {
+            if current.wrapping_sub(seconds) > 0 {
                 seconds = current;
                 break;
             }
