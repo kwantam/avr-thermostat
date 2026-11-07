@@ -17,7 +17,7 @@ use super::{ds18b20::TempSensor, ow_error_str};
 /// A macro to write a line to the serial port and increment the message counter
 macro_rules! uart_writeln {
     ($self:expr, $fmt:literal, $( $arg:expr ),*) => {{
-        ufmt::uwrite!($self.serial, "{} ", $self.message_count).unwrap_infallible();
+        ufmt::uwrite!($self.serial, "{:x} ", $self.message_count).unwrap_infallible();
         ufmt::uwriteln!($self.serial, $fmt, $($arg),*).unwrap_infallible();
         $self.message_count = $self.message_count.wrapping_add(1);
     }}
@@ -51,7 +51,7 @@ where
     temperature: Option<i16>,
     converting: bool,
     cooling: bool,
-    debounce_count: u8,
+    dwell_count: u8,
     temp_err_count: u8,
     message_count: u32,
     led: &'a mut Pin<Output, LED>,
@@ -79,7 +79,7 @@ where
             temperature: None,
             converting: false,
             cooling: false,
-            debounce_count: 0,
+            dwell_count: 0,
             temp_err_count: 0,
             message_count,
             led,
@@ -104,22 +104,22 @@ where
         self.temp_err_count >= TEMP_ERR_THRESH
     }
 
-    /// Increment the debounce counter
-    pub fn increment_debounce_cnt(&mut self) {
-        self.debounce_count = self.debounce_count.saturating_add(1);
+    /// Increment the dwell counter
+    pub fn increment_dwell_cnt(&mut self) {
+        self.dwell_count = self.dwell_count.saturating_add(1);
     }
 
-    /// Clear the debounce counter
-    fn clear_debounce_cnt(&mut self) {
-        self.debounce_count = 0;
+    /// Clear the dwell counter
+    fn clear_dwell_cnt(&mut self) {
+        self.dwell_count = 0;
     }
 
-    /// Check whether we're debounced
-    fn is_debounced(&self) -> bool {
+    /// Check whether we've dwelled long enough
+    fn can_change_state(&self) -> bool {
         if self.cooling {
-            self.debounce_count > MIN_ON_TIME
+            self.dwell_count > MIN_ON_TIME
         } else {
-            self.debounce_count > MIN_OFF_TIME
+            self.dwell_count > MIN_OFF_TIME
         }
     }
 
@@ -166,22 +166,35 @@ where
         if let Some(t) = self.temperature.take() {
             // got a good temperature reading; clear temp sensor error count
             self.clear_temp_err();
-            uart_writeln!(self, "THERM {:x}", t);
+
+            // check the hysteresis band
+            let stop_commanded = self.should_stop_cooling(t);
+            let cool_commanded = self.should_start_cooling(t);
 
             // decide whether to change cooling state
             #[allow(clippy::collapsible_if)]
-            if self.cooling && self.should_stop_cooling(t) {
+            if self.cooling && stop_commanded {
                 if self.thermostat_off() {
-                    self.clear_debounce_cnt();
+                    self.clear_dwell_cnt();
                 }
-            } else if !self.cooling && self.should_start_cooling(t) {
+            } else if !self.cooling && cool_commanded {
                 if self.thermostat_on() {
-                    self.clear_debounce_cnt();
+                    self.clear_dwell_cnt();
                 }
             }
+
+            uart_writeln!(
+                self,
+                "OK temp={:x} dwell={:x} cool={} scmd={} ccmd={}",
+                t,
+                self.dwell_count,
+                self.cooling as u8,
+                stop_commanded as u8,
+                cool_commanded as u8
+            );
         } else if self.is_temp_err() {
             // if we're in temperature sensor error state, turn off thermostat,
-            // bypassing the debouncer because this is a hard error...
+            // bypassing the dwellr because this is a hard error...
             self.thermostat_off_unchecked();
 
             // ...then write status line to the serial port...
@@ -194,11 +207,11 @@ where
         }
     }
 
-    /// Enable the thermostat if the debouncer allows it
+    /// Enable the thermostat if the dwellr allows it
     ///
     /// Returns true if the thermostat was actually enabled
     fn thermostat_on(&mut self) -> bool {
-        if self.is_debounced() {
+        if self.can_change_state() {
             self.cooling = true;
             self.led.set_high();
             self.relay.set_low();
@@ -208,11 +221,11 @@ where
         false
     }
 
-    /// Disable the thermostat if the debouncer allows it
+    /// Disable the thermostat if the dwellr allows it
     ///
     /// Returns true if the thermostat was actually disabled
     fn thermostat_off(&mut self) -> bool {
-        if self.is_debounced() {
+        if self.can_change_state() {
             self.thermostat_off_unchecked();
             return true;
         }
@@ -220,10 +233,10 @@ where
         false
     }
 
-    /// Disable the thermostat, bypassing the debouncer
+    /// Disable the thermostat, bypassing the dwellr
     ///
     /// This function should not be called except after checking
-    /// the debouncer or in case of an error state.
+    /// the dwell counter or in case of an error state.
     fn thermostat_off_unchecked(&mut self) {
         self.cooling = false;
         self.led.set_low();

@@ -118,8 +118,8 @@ fn main() -> ! {
         // update compressor state if indicated
         state.update_cooling_state();
 
-        // increment the debouncer for min on- and off-time
-        state.increment_debounce_cnt();
+        // increment the dwell counter for min on- and off-time
+        state.increment_dwell_cnt();
 
         // wait until the SECONDS timer rolls over before continuing
         loop {
