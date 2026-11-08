@@ -7,8 +7,17 @@ if len(sys.argv) < 2:
     print("USAGE: logplot.py <logfile>")
     sys.exit(1)
 
+if len(sys.argv) > 2:
+    lens = [int(arg) for arg in sys.argv[2:]]
+else:
+    # default: 24 hours, 6 hours, 2 hours
+    lens = [3600 * l for l in [24, 6, 2]]
+
+# longest plot is 24 hours
+maxlen = max(lens)
+
 file = sys.argv[1]
-with subprocess.Popen(["/usr/bin/tail", "-n", "7200", file], stdout=subprocess.PIPE, encoding="UTF8") as proc:
+with subprocess.Popen(["/usr/bin/tail", "-n", str(maxlen), file], stdout=subprocess.PIPE, encoding="UTF8") as proc:
     if proc.stdout is None:
         print("ERR Popen did not produce stdout as requested")
         sys.exit(2)
@@ -31,26 +40,25 @@ for line in lines:
             (d, rest) = (rest, '')
         (k, v) = d.split('=', 1)
         v = int(v, 16)
-        if k == "temp":
-            # convert temperature to fahrenheit
-            v = (v / 16) * (9 / 5) + 32
         rec[k] = v
 
     data.append(rec)
 
-temps = [d['temp'] for d in data]
+temps = [(d['temp'] / 16) * (9 / 5) + 32 for d in data]
 cmds = [d['cool'] for d in data]
 times = [t/60 for t in range(len(temps))]
 
-fig, ax = plt.subplots()
-twin1 = ax.twinx()
+# plot the requested data
+for start in lens:
+    fig, ax = plt.subplots()
+    twin1 = ax.twinx()
 
-p1 = ax.plot(times, temps, "C0", label="temperature")
-p2 = twin1.plot(times, cmds, "C1", label="cooling", linewidth=1, linestyle="--")
+    p1 = ax.plot(times[-start:], temps[-start:], "C0", label="temperature")
+    p2 = twin1.plot(times[-start:], cmds[-start:], "C1", label="cooling", linewidth=0.75, linestyle="--")
 
-ax.yaxis.set_major_locator(MultipleLocator(5))
-ax.yaxis.set_minor_locator(MultipleLocator(1))
-ax.grid(True, which='major', axis='y', color='gray', linewidth=0.5)
-ax.grid(True, which='minor', axis='y', color='gray', linewidth=0.5, linestyle=':')
+    ax.yaxis.set_major_locator(MultipleLocator(5))
+    ax.yaxis.set_minor_locator(MultipleLocator(1))
+    ax.grid(True, which='major', axis='y', color='gray', linewidth=0.5)
+    ax.grid(True, which='minor', axis='y', color='gray', linewidth=0.5, linestyle=':')
 
-plt.savefig(sys.stdout.buffer, format="svg")
+    plt.savefig("fridge_%d.svg" % start)
