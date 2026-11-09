@@ -29,6 +29,10 @@ const TEMP_THRESH_LO: i16 = 80;
 /// High temperature threshold: 43 F = 6 1/9 C = 97 7/9 LSBs
 const TEMP_THRESH_HI: i16 = 98;
 
+/// Our sensor has about a 3 degree F offset as measured by
+/// a calibrated thermometer.
+const TEMP_OFFSET: i16 = -49;
+
 /// Minimum on-time for the compressor is 2 minutes.
 /// Each cycle is at least 1 second, enforced by timer0.
 const MIN_ON_TIME: u8 = 120;
@@ -144,7 +148,8 @@ where
                     uart_writeln!(self, "ERR THERM(READ) {}", ow_error_str(e));
                 }
                 Ok(t) => {
-                    self.temperature = Some(t);
+                    // correct the temperature by applying the offset
+                    self.temperature = Some(t - TEMP_OFFSET);
                 }
             }
         }

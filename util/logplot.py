@@ -27,8 +27,10 @@ with subprocess.Popen(["/usr/bin/tail", "-n", str(maxlen), file], stdout=subproc
 data = []
 for line in lines:
     (num, rest) = line.split(' ', 1)
+
+    # print any line that isn't just a normal status line
     if not rest.startswith("OK"):
-        print("WARN:", line)
+        print(line)
         continue
 
     (_, rest) = rest.split(' ', 1)
@@ -43,6 +45,9 @@ for line in lines:
         rec[k] = v
 
     data.append(rec)
+
+# print the last line of the logfile
+print(lines[-1])
 
 temps = [(d['temp'] / 16) * (9 / 5) + 32 for d in data]
 cmds = [d['cool'] for d in data]
