@@ -56,14 +56,14 @@ times = [t/60 for t in range(len(temps))]
 # plot the requested data
 for start in lens:
     fig, ax = plt.subplots()
-    twin1 = ax.twinx()
+    twin = ax.twinx()
 
     p1 = ax.plot(times[-start:], temps[-start:], "C0", label="temperature")
-    p2 = twin1.plot(times[-start:], cmds[-start:], "C1", label="cooling", linewidth=0.75, linestyle="--")
+    p2 = twin.plot(times[-start:], cmds[-start:], "C1", label="cooling", linewidth=0.75, linestyle="--")
 
-    ax.yaxis.set_major_locator(MultipleLocator(5))
-    ax.yaxis.set_minor_locator(MultipleLocator(1))
-    ax.grid(True, which='major', axis='y', color='gray', linewidth=0.5)
-    ax.grid(True, which='minor', axis='y', color='gray', linewidth=0.5, linestyle=':')
+    ax.yaxis.set_major_locator(MultipleLocator(1))
+    ax.grid(True, which='major', axis='y', color='gray', linewidth=0.5, linestyle=':')
+
+    twin.yaxis.set_major_locator(MultipleLocator(1))
 
     plt.savefig("fridge_%d.svg" % start)
